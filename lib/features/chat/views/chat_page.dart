@@ -28,7 +28,7 @@ import '../widgets/file_attachment_widget.dart';
 import '../widgets/context_attachment_widget.dart';
 import '../services/voice_input_service.dart';
 import '../services/file_attachment_service.dart';
-import 'voice_call_page.dart';
+import '../voice_call/presentation/voice_call_launcher.dart';
 import '../../../shared/services/tasks/task_queue.dart';
 import '../../tools/providers/tools_providers.dart';
 import '../../../core/models/chat_message.dart';
@@ -718,15 +718,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   void _handleVoiceCall() {
-    // Dismiss keyboard before navigating
-    FocusScope.of(context).unfocus();
-
-    // Navigate to voice call page
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const VoiceCallPage(),
-        fullscreenDialog: true,
-      ),
+    unawaited(
+      ref.read(voiceCallLauncherProvider).launch(startNewConversation: false),
     );
   }
 
@@ -1423,13 +1416,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         _shouldAutoScrollToBottom = false;
       }
     }
+    final showChatHeaderTitle = ref.watch(
+      appSettingsProvider.select((s) => s.showChatHeaderTitle),
+    );
     final conversationTitle = ref.watch(
       activeConversationProvider.select((conv) => conv?.title),
     );
     final trimmedConversationTitle = conversationTitle?.trim();
     final displayConversationTitle =
         (trimmedConversationTitle != null &&
-            trimmedConversationTitle.isNotEmpty)
+            trimmedConversationTitle.isNotEmpty &&
+            showChatHeaderTitle)
         ? trimmedConversationTitle
         : null;
     // Watch loading state for app bar skeleton
@@ -1439,19 +1436,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         : null;
     final modelLabel = formattedModelName ?? l10n.chooseModel;
     final hasConversationTitle =
-        displayConversationTitle != null || isLoadingConversation;
-    final TextStyle modelTextStyle = hasConversationTitle
-        ? AppTypography.small.copyWith(
-            color: context.conduitTheme.textSecondary,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
-          )
-        : AppTypography.headlineSmallStyle.copyWith(
-            color: context.conduitTheme.textPrimary,
-            fontWeight: FontWeight.w600,
-            fontSize: 18,
-            height: 1.3,
-          );
+        (displayConversationTitle != null || isLoadingConversation) &&
+        showChatHeaderTitle;
+    final TextStyle modelTextStyle = AppTypography.standard.copyWith(
+      color: hasConversationTitle
+          ? context.conduitTheme.textSecondary
+          : context.conduitTheme.textPrimary,
+      fontWeight: FontWeight.w600,
+    );
 
     // Keyboard visibility - use viewInsetsOf for more efficient partial subscription
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -1676,7 +1668,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             // Build title pill (tappable for context menu)
                             // Show skeleton when loading, actual title otherwise
                             Widget? titlePill;
-                            if (isLoadingConversation) {
+                            if (isLoadingConversation && showChatHeaderTitle) {
                               // Show skeleton pill while loading conversation
                               titlePill = _buildAppBarPill(
                                 context: context,
@@ -1745,16 +1737,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               // Show skeleton pill while loading conversation
                               modelPill = _buildAppBarPill(
                                 context: context,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: Spacing.sm,
-                                    vertical: Spacing.xs,
+                                child: ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    minHeight: 44,
                                   ),
-                                  child: ConduitLoading.skeleton(
-                                    width: 80,
-                                    height: 14,
-                                    borderRadius: BorderRadius.circular(
-                                      AppBorderRadius.sm,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: Spacing.sm,
+                                    ),
+                                    child: Center(
+                                      widthFactor: 1,
+                                      child: ConduitLoading.skeleton(
+                                        width: 80,
+                                        height: 14,
+                                        borderRadius: BorderRadius.circular(
+                                          AppBorderRadius.sm,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1805,38 +1804,43 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 },
                                 child: _buildAppBarPill(
                                   context: context,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: Spacing.sm,
-                                      vertical: Spacing.xs,
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      minHeight: 44,
                                     ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            maxWidth:
-                                                constraints.maxWidth -
-                                                Spacing.xxl,
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                        left: 12.0,
+                                        right: Spacing.sm,
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          ConstrainedBox(
+                                            constraints: BoxConstraints(
+                                              maxWidth:
+                                                  constraints.maxWidth -
+                                                  Spacing.xxl,
+                                            ),
+                                            child: MiddleEllipsisText(
+                                              modelLabel,
+                                              style: modelTextStyle,
+                                              textAlign: TextAlign.center,
+                                              semanticsLabel: modelLabel,
+                                            ),
                                           ),
-                                          child: MiddleEllipsisText(
-                                            modelLabel,
-                                            style: modelTextStyle,
-                                            textAlign: TextAlign.center,
-                                            semanticsLabel: modelLabel,
+                                          const SizedBox(width: Spacing.xs),
+                                          Icon(
+                                            Platform.isIOS
+                                                ? CupertinoIcons.chevron_down
+                                                : Icons.keyboard_arrow_down,
+                                            color: context
+                                                .conduitTheme
+                                                .iconSecondary,
+                                            size: IconSize.small,
                                           ),
-                                        ),
-                                        const SizedBox(width: Spacing.xs),
-                                        Icon(
-                                          Platform.isIOS
-                                              ? CupertinoIcons.chevron_down
-                                              : Icons.keyboard_arrow_down,
-                                          color: context
-                                              .conduitTheme
-                                              .iconSecondary,
-                                          size: IconSize.small,
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),

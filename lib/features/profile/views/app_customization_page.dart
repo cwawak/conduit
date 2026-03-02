@@ -476,6 +476,26 @@ class AppCustomizationPage extends ConsumerWidget {
               .read(appSettingsProvider.notifier)
               .setSendOnEnter(!settings.sendOnEnter),
         ),
+        const SizedBox(height: Spacing.sm),
+        _CustomizationTile(
+          leading: _buildIconBadge(
+            context,
+            Platform.isIOS ? CupertinoIcons.textformat : Icons.title,
+            color: theme.buttonPrimary,
+          ),
+          title: l10n.showChatHeaderTitle,
+          subtitle: l10n.showChatHeaderTitleDescription,
+          trailing: Switch.adaptive(
+            value: settings.showChatHeaderTitle,
+            onChanged: (value) => ref
+                .read(appSettingsProvider.notifier)
+                .setShowChatHeaderTitle(value),
+          ),
+          showChevron: false,
+          onTap: () => ref
+              .read(appSettingsProvider.notifier)
+              .setShowChatHeaderTitle(!settings.showChatHeaderTitle),
+        ),
         if (Platform.isAndroid) ...[
           const SizedBox(height: Spacing.sm),
           _CustomizationTile(
@@ -1131,25 +1151,27 @@ class AppCustomizationPage extends ConsumerWidget {
                 subtitle: _ttsVoiceSubtitle(l10n, settings),
                 onTap: () => _showVoicePickerSheet(context, ref, settings),
               ),
-              const SizedBox(height: Spacing.md),
-              // Speech Rate Slider
-              _buildSliderTile(
-                context,
-                ref,
-                icon: UiUtils.platformIcon(
-                  ios: CupertinoIcons.speedometer,
-                  android: Icons.speed,
+              if (settings.ttsEngine == TtsEngine.device) ...[
+                const SizedBox(height: Spacing.md),
+                // Speech rate is device-only. Server TTS uses backend defaults.
+                _buildSliderTile(
+                  context,
+                  ref,
+                  icon: UiUtils.platformIcon(
+                    ios: CupertinoIcons.speedometer,
+                    android: Icons.speed,
+                  ),
+                  title: l10n.ttsSpeechRate,
+                  value: settings.ttsSpeechRate,
+                  min: 0.25,
+                  max: 2.0,
+                  divisions: 35,
+                  label: '${(settings.ttsSpeechRate * 100).round()}%',
+                  onChanged: (value) => ref
+                      .read(appSettingsProvider.notifier)
+                      .setTtsSpeechRate(value),
                 ),
-                title: l10n.ttsSpeechRate,
-                value: settings.ttsSpeechRate,
-                min: 0.25,
-                max: 2.0,
-                divisions: 35,
-                label: '${(settings.ttsSpeechRate * 100).round()}%',
-                onChanged: (value) => ref
-                    .read(appSettingsProvider.notifier)
-                    .setTtsSpeechRate(value),
-              ),
+              ],
               const SizedBox(height: Spacing.md),
               // Preview Button
               _CustomizationTile(

@@ -7,11 +7,12 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
+import '../../../shared/widgets/markdown/markdown_preprocessor.dart';
+import '../../../shared/widgets/markdown/renderer/conduit_markdown_widget.dart';
 import '../../../core/utils/reasoning_parser.dart';
 import '../../../core/utils/message_segments.dart';
 import '../../../core/utils/tool_calls_parser.dart';
 import '../../../core/models/chat_message.dart';
-import '../../../shared/widgets/markdown/markdown_preprocessor.dart';
 import '../providers/text_to_speech_provider.dart';
 import 'enhanced_image_attachment.dart';
 import 'package:conduit/l10n/app_localizations.dart';
@@ -705,7 +706,9 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final visibleStatuses = widget.message.statusHistory
         .where((status) => status.hidden != true)
         .toList();
-    final hasPendingStatus = visibleStatuses.any((status) => status.done != true);
+    final hasPendingStatus = visibleStatuses.any(
+      (status) => status.done != true,
+    );
     if (hasPendingStatus) {
       // Pending status has shimmer effect, no need for typing indicator
       return false;
@@ -941,8 +944,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final msg = widget.message as ChatMessage;
 
     // If viewing a version, return the version's error
-    if (_activeVersionIndex >= 0 &&
-        _activeVersionIndex < msg.versions.length) {
+    if (_activeVersionIndex >= 0 && _activeVersionIndex < msg.versions.length) {
       return msg.versions[_activeVersionIndex].error;
     }
 
@@ -972,18 +974,12 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.info_outline,
-            size: 20,
-            color: errorColor,
-          ),
+          Icon(Icons.info_outline, size: 20, color: errorColor),
           const SizedBox(width: Spacing.sm),
           Expanded(
             child: Text(
               displayText,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: errorColor,
-              ),
+              style: theme.textTheme.bodyMedium?.copyWith(color: errorColor),
             ),
           ),
         ],
@@ -1321,7 +1317,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     // Also check the active version's error if viewing a version
     final activeError = _getActiveError();
     final hasErrorField = activeError != null;
-    final isErrorMessage = hasErrorField ||
+    final isErrorMessage =
+        hasErrorField ||
         widget.message.content.contains('⚠️') ||
         widget.message.content.contains('Error') ||
         widget.message.content.contains('timeout') ||
@@ -1518,9 +1515,20 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final evalDuration = _parseNum(usage['eval_duration']);
     final promptEvalCount = _parseNum(usage['prompt_eval_count']);
     final promptEvalDuration = _parseNum(usage['prompt_eval_duration']);
-    final completionTokens = _parseNum(usage['completion_tokens']);
-    final promptTokens = _parseNum(usage['prompt_tokens']);
+
+    // Support both OpenAI format (completion_tokens/prompt_tokens)
+    // and OpenRouter format (output_tokens/input_tokens)
+    final completionTokens = _parseNum(
+      usage['completion_tokens'] ?? usage['output_tokens'],
+    );
+    final promptTokens = _parseNum(
+      usage['prompt_tokens'] ?? usage['input_tokens'],
+    );
     final totalTokens = _parseNum(usage['total_tokens']);
+
+    // Cost from OpenRouter pipe
+    final cost = _parseNum(usage['cost']);
+
     // Time fields in seconds (Groq/OpenAI extended format)
     final completionTime = _parseNum(usage['completion_time']);
     final promptTime = _parseNum(usage['prompt_time']);
@@ -1529,11 +1537,14 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     // Time fields in nanoseconds (Ollama/llama.cpp format)
     final totalDuration = _parseNum(usage['total_duration']);
     final loadDuration = _parseNum(usage['load_duration']);
-    // Reasoning tokens (OpenAI o1/o3 models, Groq)
+    // Reasoning tokens - support both OpenAI and OpenRouter formats
     final completionDetails = usage['completion_tokens_details'];
+    final outputDetails = usage['output_tokens_details'];
     final reasoningTokens = completionDetails is Map
         ? _parseNum(completionDetails['reasoning_tokens'])
-        : null;
+        : (outputDetails is Map
+              ? _parseNum(outputDetails['reasoning_tokens'])
+              : null);
 
     // llama.cpp server format: pre-calculated tokens/second values
     final predictedPerSecond = _parseNum(usage['predicted_per_second']);
@@ -1548,8 +1559,12 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       stats.add(
         _UsageStatRow(
           label: l10n.usageTokenGeneration,
-          value: l10n.usageTokensPerSecond(predictedPerSecond.toStringAsFixed(1)),
-          detail: predictedN != null ? l10n.usageTokenCount(predictedN.toInt()) : null,
+          value: l10n.usageTokensPerSecond(
+            predictedPerSecond.toStringAsFixed(1),
+          ),
+          detail: predictedN != null
+              ? l10n.usageTokenCount(predictedN.toInt())
+              : null,
           theme: theme,
         ),
       );
@@ -1596,7 +1611,9 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         _UsageStatRow(
           label: l10n.usagePromptEval,
           value: l10n.usageTokensPerSecond(promptPerSecond.toStringAsFixed(1)),
-          detail: promptN != null ? l10n.usageTokenCount(promptN.toInt()) : null,
+          detail: promptN != null
+              ? l10n.usageTokenCount(promptN.toInt())
+              : null,
           theme: theme,
         ),
       );
@@ -1658,6 +1675,17 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       );
     }
 
+    // --- Cost (OpenRouter pipe format) ---
+    if (cost != null && cost > 0) {
+      stats.add(
+        _UsageStatRow(
+          label: 'Cost',
+          value: '\$${cost.toStringAsFixed(6)}',
+          theme: theme,
+        ),
+      );
+    }
+
     // --- Total Duration ---
     if (totalDuration != null && totalDuration > 0) {
       // Ollama/llama.cpp: nanoseconds
@@ -1714,10 +1742,115 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     return null;
   }
 
+  /// Opens a bottom sheet modal displaying the full reasoning/thinking
+  /// content with markdown rendering.
+  void _showReasoningBottomSheet(
+    ReasoningEntry rc,
+    String title, {
+    int? index,
+  }) {
+    final theme = context.conduitTheme;
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: theme.surfaceBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppBorderRadius.dialog),
+        ),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.3,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (_, controller) {
+            return Column(
+              children: [
+                // Drag handle
+                Padding(
+                  padding: const EdgeInsets.only(top: Spacing.sm),
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: theme.dividerColor.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                // Header row
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Spacing.lg,
+                    vertical: Spacing.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.psychology_outlined,
+                        size: IconSize.md,
+                        color: theme.textPrimary,
+                      ),
+                      const SizedBox(width: Spacing.sm),
+                      Expanded(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: AppTypography.bodyLarge,
+                            fontWeight: FontWeight.w600,
+                            color: theme.textPrimary,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, size: 20),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        color: theme.textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+                Divider(
+                  height: 1,
+                  color: theme.dividerColor.withValues(alpha: 0.3),
+                ),
+                // Scrollable markdown body
+                Expanded(
+                  child: ListView(
+                    controller: controller,
+                    padding: const EdgeInsets.all(Spacing.lg),
+                    children: [
+                      StreamingMarkdownWidget(
+                        content: rc.cleanedReasoning,
+                        isStreaming: !rc.isDone,
+                        onTapLink: (url, _) => _launchUri(url),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).whenComplete(() {
+      if (!mounted) return;
+      if (index != null) {
+        setState(() => _expandedReasoning.remove(index));
+      }
+    });
+  }
+
   // Reasoning tile rendered inline - minimal design inspired by OpenWebUI
   Widget _buildReasoningTile(ReasoningEntry rc, int index) {
-    final isExpanded = _expandedReasoning.contains(index);
     final theme = context.conduitTheme;
+    final isExpanded = _expandedReasoning.contains(index);
     // Show shimmer when reasoning is not done (mirrors OpenWebUI's done !== 'true')
     final showShimmer = !rc.isDone;
 
@@ -1757,7 +1890,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
       // Done thinking - always use humanized duration format
       // This ensures "less than a second" instead of "0 secs" from server
-      if (rc.duration >= 0 && (rc.duration > 0 || hasDurationInSummary || isThinkingSummary)) {
+      if (rc.duration >= 0 &&
+          (rc.duration > 0 || hasDurationInSummary || isThinkingSummary)) {
         return l10n.thoughtForDuration(rc.formattedDuration);
       }
 
@@ -1807,17 +1941,15 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       return headerWidget;
     }
 
+    final title = headerText();
+
     return Padding(
       padding: const EdgeInsets.only(bottom: Spacing.xs),
       child: GestureDetector(
         onTap: () {
-          setState(() {
-            if (isExpanded) {
-              _expandedReasoning.remove(index);
-            } else {
-              _expandedReasoning.add(index);
-            }
-          });
+          if (rc.cleanedReasoning.trim().isEmpty) return;
+          setState(() => _expandedReasoning.add(index));
+          _showReasoningBottomSheet(rc, title, index: index);
         },
         behavior: HitTestBehavior.opaque,
         child: Column(
@@ -1846,15 +1978,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                     ),
                   ),
                 ),
-                child: SelectableText(
-                  rc.cleanedReasoning,
-                  style: TextStyle(
-                    fontSize: AppTypography.bodySmall,
-                    color: theme.textSecondary,
-                    fontFamily: AppTypography.monospaceFontFamily,
-                    height: 1.4,
-                  ),
-                ),
+                child: ConduitMarkdownWidget(data: rc.cleanedReasoning),
               ),
               crossFadeState: isExpanded
                   ? CrossFadeState.showSecond
